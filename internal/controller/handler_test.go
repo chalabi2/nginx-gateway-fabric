@@ -529,6 +529,138 @@ var _ = Describe("eventHandler", func() {
 		})
 	})
 
+	Describe("configuration apply recovery", func() {
+		var retryEventCh chan any
+		var deploymentName types.NamespacedName
+		BeforeEach(func() {
+			retryEventCh = make(chan any, 10)
+			handler.cfg.configRetry = newTestConfigRetryScheduler(ctx, retryEventCh)
+			fakeProcessor.ProcessReturns(baseGraph)
+			deploymentName = baseGraph.Gateways[types.NamespacedName{Namespace: "test", Name: "gateway"}].DeploymentName
+		})
+
+		It("retries after an apply acknowledgement error without another Kubernetes event", func() {
+			deployment := handler.cfg.nginxDeployments.LoadOrStore(ctx, deploymentName, "gateway")
+			fakeNginxUpdater.UpdateConfigCalls(func(d *agent.Deployment, _ []agent.File, _ []v1.VolumeMount) {
+				d.SetLatestConfigError(errors.New("agent rejected config"))
+			})
+			handler.HandleEventBatch(ctx, logr.Discard(), []any{&events.UpsertEvent{Resource: &gatewayv1.HTTPRoute{}}})
+			var retry any
+			Eventually(retryEventCh).Should(Receive(&retry))
+			Expect(retry).To(Equal(events.ConfigRetryEvent{Deployment: deploymentName}))
+			fakeNginxUpdater.UpdateConfigCalls(func(d *agent.Deployment, _ []agent.File, _ []v1.VolumeMount) {
+				d.SetLatestConfigError(nil)
+			})
+			handler.HandleEventBatch(ctx, logr.Discard(), []any{retry})
+			Expect(fakeProcessor.ForceRebuildCallCount()).To(Equal(1))
+			Expect(fakeNginxUpdater.UpdateConfigCallCount()).To(Equal(2))
+			Expect(deployment.GetLatestConfigError()).To(Succeed())
+			// Synchronize with status processing before inspecting scheduler state.
+			Eventually(fakeStatusUpdater.UpdateGroupCallCount).Should(Equal(4))
+			handler.cfg.configRetry.mu.Lock()
+			Expect(handler.cfg.configRetry.retries).To(BeEmpty())
+			handler.cfg.configRetry.mu.Unlock()
+		})
+
+		It("schedules initial subscription failures from the status queue", func() {
+			queue.Enqueue(&status.QueueObject{
+				UpdateType:        status.UpdateAll,
+				NginxConfigPushed: true,
+				Error:             errors.New("initial agent apply failed"),
+				Deployment:        status.Deployment{NamespacedName: deploymentName, GatewayName: "gateway"},
+			})
+			Eventually(retryEventCh).Should(Receive(Equal(events.ConfigRetryEvent{Deployment: deploymentName})))
+			Expect(fakeNginxUpdater.UpdateConfigCallCount()).To(Equal(0))
+		})
+
+		It("retains retries when a stale successful pod status arrives after another pod fails", func() {
+			deployment := handler.cfg.nginxDeployments.LoadOrStore(ctx, deploymentName, "gateway")
+			deployment.SetPodErrorStatus("pod-b", nil)
+			// The producer captured success before pod A failed, then queued it later.
+			success := &status.QueueObject{
+				UpdateType: status.UpdateAll, NginxConfigPushed: true,
+				Deployment: status.Deployment{NamespacedName: deploymentName, GatewayName: "gateway"},
+			}
+			deployment.SetPodErrorStatus("pod-a", errors.New("pod A rejected config"))
+			handler.cfg.configRetry.Reconcile(deploymentName, deployment.GetConfigurationStatus())
+			queue.Enqueue(success)
+			Eventually(fakeStatusUpdater.UpdateGroupCallCount).Should(Equal(2))
+			Eventually(retryEventCh).Should(Receive(Equal(events.ConfigRetryEvent{Deployment: deploymentName})))
+			_, _, requests := fakeStatusUpdater.UpdateGroupArgsForCall(1)
+			gateway := &gatewayv1.Gateway{}
+			requests[0].Setter(gateway)
+			var programmed *metav1.Condition
+			for _, condition := range gateway.Status.Conditions {
+				if condition.Type == string(gatewayv1.GatewayConditionProgrammed) {
+					programmed = &condition
+				}
+			}
+			Expect(programmed).NotTo(BeNil())
+			Expect(programmed.Status).To(Equal(metav1.ConditionFalse))
+			Expect(programmed.Message).To(ContainSubstring("pod A rejected config"))
+			deployment.SetPodErrorStatus("pod-a", nil)
+			queue.Enqueue(success)
+			Eventually(fakeStatusUpdater.UpdateGroupCallCount).Should(Equal(4))
+			handler.cfg.configRetry.mu.Lock()
+			Expect(handler.cfg.configRetry.retries).To(BeEmpty())
+			handler.cfg.configRetry.mu.Unlock()
+		})
+
+		It("keeps failed reload status when a graph rebuild receives a status-only update", func() {
+			fakeProcessor.GetLatestGraphCalls(func() *graph.Graph {
+				return &graph.Graph{Gateways: map[types.NamespacedName]*graph.Gateway{
+					{Namespace: "test", Name: "gateway"}: {
+						Valid:     true,
+						Source:    &gatewayv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gateway", Namespace: "test"}},
+						Listeners: []*graph.Listener{{}}, DeploymentName: deploymentName,
+					},
+				}}
+			})
+			handler.cfg.configRetry.backoff.Duration = time.Hour
+			queue.Enqueue(&status.QueueObject{
+				UpdateType: status.UpdateAll, NginxConfigPushed: true,
+				Error:      errors.New("config apply failed"),
+				Deployment: status.Deployment{NamespacedName: deploymentName, GatewayName: "gateway"},
+			})
+			Eventually(fakeStatusUpdater.UpdateGroupCallCount).Should(Equal(2))
+			queue.Enqueue(&status.QueueObject{
+				UpdateType: status.UpdateAll,
+				Deployment: status.Deployment{NamespacedName: deploymentName, GatewayName: "gateway"},
+			})
+			Eventually(fakeStatusUpdater.UpdateGroupCallCount).Should(Equal(4))
+			for _, index := range []int{1, 3} {
+				_, group, requests := fakeStatusUpdater.UpdateGroupArgsForCall(index)
+				Expect(group).To(Equal(groupGateways))
+				Expect(requests).To(HaveLen(1))
+				gateway := &gatewayv1.Gateway{}
+				requests[0].Setter(gateway)
+				var programmed *metav1.Condition
+				for _, condition := range gateway.Status.Conditions {
+					if condition.Type == string(gatewayv1.GatewayConditionProgrammed) {
+						programmed = &condition
+					}
+				}
+				Expect(programmed).NotTo(BeNil())
+				Expect(programmed.Status).To(Equal(metav1.ConditionFalse))
+				Expect(programmed.Message).To(ContainSubstring("config apply failed"))
+			}
+			handler.cfg.configRetry.Reconcile(deploymentName, nil)
+		})
+
+		It("cancels pending retries when the final Gateway is deleted", func() {
+			handler.cfg.configRetry.backoff.Duration = time.Hour
+			handler.cfg.configRetry.Reconcile(deploymentName, errors.New("apply failed"))
+			fakeProcessor.ProcessReturns(&graph.Graph{})
+			handler.HandleEventBatch(ctx, logr.Discard(), []any{&events.DeleteEvent{
+				Type: &gatewayv1.Gateway{}, NamespacedName: types.NamespacedName{Namespace: "test", Name: "gateway"},
+			}})
+			handler.cfg.configRetry.mu.Lock()
+			Expect(handler.cfg.configRetry.retries).To(BeEmpty())
+			handler.cfg.configRetry.mu.Unlock()
+			Consistently(retryEventCh, 20*time.Millisecond).ShouldNot(Receive())
+		})
+	})
+
 	It("should update status when receiving a queue event", func() {
 		obj := &status.QueueObject{
 			UpdateType: status.UpdateAll,

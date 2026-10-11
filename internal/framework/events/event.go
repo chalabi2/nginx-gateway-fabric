@@ -31,3 +31,8 @@ type WAFBundleReconcileEvent struct {
 	// PolicyNsName is the namespace/name of the WAFPolicy whose bundle is now available.
 	PolicyNsName types.NamespacedName
 }
+
+// ConfigRetryEvent retries configuration delivery without requiring a Kubernetes object change.
+type ConfigRetryEvent struct {
+	Deployment types.NamespacedName
+}

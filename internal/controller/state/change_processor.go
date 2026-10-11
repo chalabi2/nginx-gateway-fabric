@@ -23,6 +23,7 @@ import (
 	ngfAPIv1alpha2 "github.com/nginx/nginx-gateway-fabric/v2/apis/v1alpha2"
 	"github.com/nginx/nginx-gateway-fabric/v2/internal/controller/nginx/config/policies"
 	"github.com/nginx/nginx-gateway-fabric/v2/internal/controller/state/graph"
+	"github.com/nginx/nginx-gateway-fabric/v2/internal/controller/state/resolver"
 	"github.com/nginx/nginx-gateway-fabric/v2/internal/controller/state/validation"
 	"github.com/nginx/nginx-gateway-fabric/v2/internal/framework/kinds"
 	ngftypes "github.com/nginx/nginx-gateway-fabric/v2/internal/framework/types"
@@ -58,6 +59,8 @@ type ChangeProcessor interface {
 
 // ChangeProcessorConfig holds configuration parameters for ChangeProcessorImpl.
 type ChangeProcessorConfig struct {
+	// EndpointSliceOwnership maps deleted slices to their previously resolved Service.
+	EndpointSliceOwnership *resolver.EndpointSliceOwnership
 	// Validators validate resources according to data-plane specific rules.
 	Validators validation.Validators
 	// EventRecorder records events for Kubernetes resources.
@@ -398,6 +401,7 @@ func (c *ChangeProcessorImpl) Process(ctx context.Context) *graph.Graph {
 		c.cfg.Validators,
 		c.cfg.Logger,
 		c.cfg.FeatureFlags,
+		c.cfg.EndpointSliceOwnership,
 	)
 
 	return c.latestGraph

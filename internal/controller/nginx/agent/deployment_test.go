@@ -65,7 +65,8 @@ func TestSetAndGetFiles(t *testing.T) {
 	g.Expect(found).To(BeFalse())
 	g.Expect(wrongHashFile).To(BeNil())
 
-	// Set the same files again
+	// Confirm successful delivery before testing unchanged configuration.
+	g.Expect(deployment.RecordConfigApplyResult(configVersion)).To(Succeed())
 	msg = deployment.SetFiles(files, []v1.VolumeMount{})
 	g.Expect(msg).To(BeNil())
 
@@ -150,7 +151,8 @@ func TestSetAndGetFiles_VolumeIgnoreFiles(t *testing.T) {
 	g.Expect(found).To(BeFalse())
 	g.Expect(wrongHashFile).To(BeNil())
 
-	// Set the same files again
+	// Confirm successful delivery before testing unchanged configuration.
+	g.Expect(deployment.RecordConfigApplyResult(configVersion)).To(Succeed())
 	msg = deployment.SetFiles(files, volumeMounts)
 	g.Expect(msg).To(BeNil())
 
@@ -310,7 +312,8 @@ func TestUpdateWAFBundle(t *testing.T) {
 		{
 			name: "replaces existing bundle with new contents",
 			setup: func(d *Deployment) {
-				d.UpdateWAFBundle(bundlePath, []byte("bundle-v1"))
+				msg := d.UpdateWAFBundle(bundlePath, []byte("bundle-v1"))
+				d.RecordConfigApplyResult(msg.ConfigVersion)
 			},
 			data:           []byte("bundle-v2"),
 			expectNumFiles: 1,
@@ -318,7 +321,8 @@ func TestUpdateWAFBundle(t *testing.T) {
 		{
 			name: "returns nil when bundle contents are unchanged",
 			setup: func(d *Deployment) {
-				d.UpdateWAFBundle(bundlePath, []byte("bundle-v1"))
+				msg := d.UpdateWAFBundle(bundlePath, []byte("bundle-v1"))
+				d.RecordConfigApplyResult(msg.ConfigVersion)
 			},
 			data:      []byte("bundle-v1"),
 			expectNil: true,

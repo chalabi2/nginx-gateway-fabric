@@ -162,6 +162,8 @@ func StartManager(cfg config.Config) error {
 
 	plmFetcher, plmSecretNames := createPLMFetcher(cfg)
 
+	endpointSliceOwnership := resolver.NewEndpointSliceOwnership()
+
 	processor := state.NewChangeProcessorImpl(state.ChangeProcessorConfig{
 		GatewayCtlrName:  cfg.GatewayCtlrName,
 		GatewayClassName: cfg.GatewayClassName,
@@ -189,9 +191,10 @@ func StartManager(cfg config.Config) error {
 			Plus:         cfg.Plus,
 			Experimental: cfg.ExperimentalFeatures,
 		},
-		DiscoveredCRDs:   discoveredCRDs,
-		Snippets:         cfg.Snippets,
-		PayloadProcessor: cfg.PayloadProcessor,
+		DiscoveredCRDs:         discoveredCRDs,
+		Snippets:               cfg.Snippets,
+		PayloadProcessor:       cfg.PayloadProcessor,
+		EndpointSliceOwnership: endpointSliceOwnership,
 	})
 
 	statusUpdater := status.NewUpdater(
@@ -221,13 +224,14 @@ func StartManager(cfg config.Config) error {
 	wafPollerManager = createWAFPollerManager(ctx, cfg, wafFetcher, nginxUpdater, statusQueue, eventCh)
 
 	eventHandler := newEventHandlerImpl(eventHandlerConfig{
+		configRetry:      newConfigRetryScheduler(ctx, eventCh),
 		ctx:              ctx,
 		nginxUpdater:     nginxUpdater,
 		nginxProvisioner: nginxProvisioner,
 		metricsCollector: createMetricsCollector(cfg),
 		statusUpdater:    groupStatusUpdater,
 		processor:        processor,
-		serviceResolver:  resolver.NewServiceResolverImpl(mgr.GetClient()),
+		serviceResolver:  resolver.NewServiceResolverImpl(mgr.GetClient(), endpointSliceOwnership),
 		generator: ngxcfg.NewGeneratorImpl(
 			cfg.Plus,
 			&cfg.UsageReportConfig,

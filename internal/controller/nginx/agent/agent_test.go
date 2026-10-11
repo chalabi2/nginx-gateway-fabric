@@ -89,39 +89,21 @@ func TestUpdateConfig(t *testing.T) {
 func TestUpdateConfig_NoChange(t *testing.T) {
 	t.Parallel()
 	g := NewWithT(t)
-
-	fakeBroadcaster := &broadcastfakes.FakeBroadcaster{}
-
+	broadcaster := &broadcastfakes.FakeBroadcaster{}
+	broadcaster.SendReturns(true)
 	updater := NewNginxUpdater(logr.Discard(), fake.NewFakeClient(), &status.Queue{}, nil, false)
-
-	deployment := &Deployment{
-		broadcaster: fakeBroadcaster,
-		podStatuses: make(map[string]error),
-	}
-
-	file := File{
-		Meta: &pb.FileMeta{
-			Name: "test.conf",
-			Hash: "12345",
-		},
-		Contents: []byte("test content"),
-	}
-
-	// Set the initial files on the deployment
-	deployment.SetFiles([]File{file}, []v1.VolumeMount{})
-
+	deployment := &Deployment{broadcaster: broadcaster, podStatuses: make(map[string]error)}
+	file := File{Meta: &pb.FileMeta{Name: "test.conf", Hash: "12345"}, Contents: []byte("test content")}
+	updater.UpdateConfig(deployment, []File{file}, nil)
+	updater.UpdateConfig(deployment, []File{file}, nil)
+	g.Expect(broadcaster.SendCallCount()).To(Equal(1))
 	testErr := errors.New("test error")
 	deployment.SetPodErrorStatus("pod1", testErr)
-
-	// Call UpdateConfig with the same files
-	updater.UpdateConfig(deployment, []File{file}, []v1.VolumeMount{})
-
-	// Verify that no new configuration was sent
-	g.Expect(fakeBroadcaster.SendCallCount()).To(Equal(0))
+	updater.UpdateConfig(deployment, []File{file}, nil)
+	g.Expect(broadcaster.SendCallCount()).To(Equal(2))
 	g.Expect(deployment.GetLatestConfigError()).To(Equal(testErr))
-
 	deployment.SetPodErrorStatus("pod1", nil)
-	updater.UpdateConfig(deployment, []File{file}, []v1.VolumeMount{})
+	updater.UpdateConfig(deployment, []File{file}, nil)
 	g.Expect(deployment.GetLatestConfigError()).ToNot(HaveOccurred())
 }
 

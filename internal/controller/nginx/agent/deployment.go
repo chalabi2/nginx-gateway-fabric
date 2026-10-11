@@ -49,6 +49,8 @@ type Deployment struct {
 	imageVersion string
 
 	configVersion string
+	// appliedConfigVersion advances only after the data plane accepts the configuration.
+	appliedConfigVersion string
 	// error that is set if a ConfigApply call failed for a Pod. This is needed
 	// because if subsequent upstream API calls are made within the same update event,
 	// and are successful, the previous error would be lost in the podStatuses map.
@@ -137,6 +139,15 @@ func (d *Deployment) GetLatestUpstreamError() error {
 	defer d.errLock.RUnlock()
 
 	return d.latestUpstreamError
+}
+
+// RecordConfigApplyResult records a successfully applied version. The caller holds FileLock.
+func (d *Deployment) RecordConfigApplyResult(version string) error {
+	err := d.GetConfigurationStatus()
+	if err == nil {
+		d.appliedConfigVersion = version
+	}
+	return err
 }
 
 // SetPodErrorStatus sets the error status of a Pod in this Deployment if applying the config failed.
@@ -311,8 +322,8 @@ func (d *Deployment) rebuildFileOverviews() *broadcast.NginxAgentMessage {
 	}
 
 	newConfigVersion := filesHelper.GenerateConfigVersion(fileOverviews)
-	if d.configVersion == newConfigVersion {
-		// files have not changed, nothing to send
+	if d.appliedConfigVersion == newConfigVersion && d.GetConfigurationStatus() == nil {
+		// The exact configuration was applied and every currently connected Pod is healthy.
 		return nil
 	}
 
