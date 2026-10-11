@@ -1,0 +1,115 @@
+name: Akash gateway images
+
+on:
+  push:
+    tags:
+      - 'v2.7.2-akash.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: akash-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    if: github.repository == 'chalabi2/nginx-gateway-fabric'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate candidate tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" =~ ^refs/tags/v2\.7\.2-akash\.[0-9]+(-rc[0-9]+)?$ ]]
+          echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run gateway regression tests
+        run: go test -race ./internal/controller ./internal/controller/nginx/agent ./internal/controller/state/... ./internal/framework/waf/poller -count=1
+      - name: Build controller binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags '-s -w -X main.version=2.7.2 -X main.telemetryReportPeriod=24h -X main.telemetryEndpoint= -X main.telemetryEndpointInsecure=false' \
+              -o "build/out/$arch/gateway" ./cmd/gateway
+          done
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish controller
+        id: controller
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: build/akash/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
+          provenance: true
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
+            org.opencontainers.image.vendor=chalabi2
+            org.opencontainers.image.description=NGF 2.7.2 recovery candidate for Akash
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/akash/README.md
+      - name: Publish dataplane
+        id: nginx
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: build/akash/Dockerfile.nginx
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}/nginx:${{ steps.version.outputs.tag }}
+          provenance: true
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
+            org.opencontainers.image.vendor=chalabi2
+            org.opencontainers.image.description=NGF 2.7.2 dataplane with NGINX Agent 3.12.1 for Akash
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/akash/README.md
+      - name: Verify published amd64 images
+        env:
+          CONTROLLER_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.controller.outputs.digest }}
+          NGINX_IMAGE: ghcr.io/${{ github.repository }}/nginx@${{ steps.nginx.outputs.digest }}
+        run: |
+          docker run --rm "$CONTROLLER_IMAGE" --help
+          docker run --rm --entrypoint nginx-agent "$NGINX_IMAGE" --version | grep 'v3.12.1'
+      - name: Save image references
+        env:
+          IMAGE_TAG: ${{ steps.version.outputs.tag }}
+          CONTROLLER_DIGEST: ${{ steps.controller.outputs.digest }}
+          NGINX_DIGEST: ${{ steps.nginx.outputs.digest }}
+        shell: bash
+        run: |
+          jq -n --arg source "$GITHUB_SHA" --arg tag "$IMAGE_TAG" \
+            --arg controller "ghcr.io/$GITHUB_REPOSITORY@$CONTROLLER_DIGEST" \
+            --arg nginx "ghcr.io/$GITHUB_REPOSITORY/nginx@$NGINX_DIGEST" \
+            '{source: $source, tag: $tag, controller: $controller, nginx: $nginx}' > images.json
+          cat images.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: akash-gateway-images
+          path: images.json

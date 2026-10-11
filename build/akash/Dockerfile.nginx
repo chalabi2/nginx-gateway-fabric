@@ -1,0 +1,6 @@
+# Preserve the tested NGINX modules and configuration; replace only Agent.
+FROM ghcr.io/nginx/nginx-gateway-fabric/nginx:2.7.2@sha256:9e60ee68f0d0f901795c6ade7344391bca307a952585e86dfd7b6a28eacfe78e
+USER root
+COPY build/akash/nginx_signing.rsa.pub /etc/apk/keys/nginx_signing.rsa.pub
+RUN apk add --no-cache nginx-agent=3.12.1
+USER 101:1001

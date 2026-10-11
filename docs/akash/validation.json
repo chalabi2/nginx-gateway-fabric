@@ -1,0 +1,47 @@
+{
+  "tested_at": "2026-10-11",
+  "base_commit": "580542620c2290118ba6dba5af7a612e6feaafbc",
+  "gateway_source_commit": "08cffcd",
+  "environment": {
+    "kubernetes": "v1.32.5",
+    "gateway_api_crds": "v1.5.1",
+    "architecture": "amd64 emulation on arm64 Mac",
+    "node_count": 1
+  },
+  "provider": {
+    "version": "v0.16.5-rc2",
+    "source_commit": "ed9ea77fb5f275dd4a41feb8ce4ef0fb3b8999d0",
+    "executable": "published darwin arm64 provider-services, used for both provider and hostname operator",
+    "sha256": "8713ff95141326022906cacc0c9648590ee30166b8d91a398d82af199df690f2",
+    "runtime_source_changed_for_tests": false
+  },
+  "artifacts": {
+    "ngf-2.7.2-local-recovery.patch": {
+      "sha256": "5e6a598af690a081244292f71e5a25d6ecd0112b1456fd57d1855197d3fc4fc2"
+    },
+    "provider-validation-harness.patch": {
+      "sha256": "8c383073d58008b01c397e8665d33ccbc5b465d6b34f836c45007688d6b83d4a"
+    },
+    "released-faults-v3.test": {
+      "sha256": "23712eef361ed1f8b867411b08048eca488b6d66a59ddfb9f1d8aa3d91b7f2a7"
+    },
+    "controller-image/gateway": {
+      "sha256": "2e3a4511f7199ce86f4896ee6a2fdd26c203609d0e12a904fa24928772da9a55"
+    }
+  },
+  "unit_tests": {
+    "stock_retry_regressions": "failed as expected, 2 cases",
+    "candidate_race_suite": "passed"
+  },
+  "results": {
+    "failed_apply_recovery_seconds": 33.053039291,
+    "removed_backend_requests": 0,
+    "endpoint_requests": 60,
+    "fifo_error_acknowledged": true,
+    "queued_route_processed": true,
+    "lifecycle_leases": 6,
+    "healthy_http_requests": 3299,
+    "healthy_http_errors": 0
+  },
+  "scope": "Historical local amd64 integration of this source before image publication. Published artifact checks are reported separately."
+}

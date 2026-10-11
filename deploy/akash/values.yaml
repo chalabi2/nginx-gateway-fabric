@@ -1,0 +1,12 @@
+# Overlay for an existing NGF 2.7.2 Helm installation.
+# Retain the provider's existing networking, Gateway and snippets settings.
+nginxGateway:
+  image:
+    repository: ghcr.io/chalabi2/nginx-gateway-fabric
+    tag: 2.7.2-akash.1-rc1
+    pullPolicy: IfNotPresent
+nginx:
+  image:
+    repository: ghcr.io/chalabi2/nginx-gateway-fabric/nginx
+    tag: 2.7.2-akash.1-rc1
+    pullPolicy: IfNotPresent
